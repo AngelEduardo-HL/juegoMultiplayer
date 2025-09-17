@@ -412,11 +412,7 @@ MonoBehaviour:
   ProjectilePrefab: {fileID: 8638563329233284941, guid: af8452cc57a2e2546b7a7225778204cd, type: 3}
   WeaponSocket: {fileID: 5223137522410378691}
   FireRate: 2
-  FullAuto: 0
-  Hats:
-  - {fileID: 6569087374718465842, guid: f63cef9aad1607845a041c3c4721f866, type: 3}
-  - {fileID: 1376958299896568929, guid: 3836354df16be1546a481aa391ce4a65, type: 3}
-  - {fileID: 2224748601299745144, guid: 230f4733e3b3b174288dbbc02b81f053, type: 3}
+  FullAuto: 1
   speed: 2
   CameraOffset: {x: 0, y: 2.5, z: 2}
   desiredDirection: {x: 0, y: 0, z: 0}
@@ -425,6 +421,10 @@ MonoBehaviour:
   DamageSound: {fileID: 0}
   AttackSound: {fileID: 0}
   menuManager: {fileID: 0}
+  Hats:
+  - {fileID: 6569087374718465842, guid: f63cef9aad1607845a041c3c4721f866, type: 3}
+  - {fileID: 1376958299896568929, guid: 3836354df16be1546a481aa391ce4a65, type: 3}
+  - {fileID: 2224748601299745144, guid: 230f4733e3b3b174288dbbc02b81f053, type: 3}
 --- !u!136 &2899693564771417883
 CapsuleCollider:
   m_ObjectHideFlags: 0

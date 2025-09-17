@@ -36,13 +36,11 @@ public class MenuManager : MonoBehaviour
 
     void Start()
     {
-
         TemplatePlayerLabel.gameObject.SetActive(false);
         HUD.gameObject.SetActive(false);
         mainMenu.gameObject.SetActive(true);
 
         GetNames();
-
     }
 
     public void OnButtonCreate()
@@ -70,19 +68,6 @@ public class MenuManager : MonoBehaviour
         StartCoroutine(GetNamesFromServer());
     }
 
-    public void SelectHat(int idx)
-    {
-        selectedSombrero = idx;
-        Debug.Log("Sombrero seleccionado: " + idx);
-
-        // Replacing the deprecated method with the recommended one
-        var localPlayer = Object.FindFirstObjectByType<PlayerController>();
-        if (localPlayer != null && localPlayer.IsOwner)
-        {
-            localPlayer.SetHatIDRpc(idx);
-        }
-    }
-
     IEnumerator GetNamesFromServer()
     {
         //Hacer una peticion de tipo GET a la API para obtener los nombres
@@ -90,7 +75,7 @@ public class MenuManager : MonoBehaviour
 
         yield return request.SendWebRequest();
 
-        if(request.result == UnityWebRequest.Result.Success)
+        if (request.result == UnityWebRequest.Result.Success)
         {
             Debug.Log("Nombres obtenidos correctamente: " + request.downloadHandler.text);
             string json = request.downloadHandler.text;
@@ -103,6 +88,26 @@ public class MenuManager : MonoBehaviour
         else
         {
             Debug.Log("Error al obtener los nombres: " + request);
+        }
+    }
+
+    // === NUEVO: Selección de sombrero desde botones del Canvas ===
+    public void SelectHat(int idx)
+    {
+        selectedSombrero = idx;
+        Debug.Log("Sombrero seleccionado: " + idx);
+
+        // Obtener el PlayerController del jugador local de forma segura
+        var localPlayerObj = NetworkManager.Singleton?.LocalClient?.PlayerObject;
+        var localPlayer = localPlayerObj ? localPlayerObj.GetComponent<PlayerController>() : null;
+        if (localPlayer != null && localPlayer.IsOwner)
+        {
+            // Enviar al servidor el índice de sombrero seleccionado
+            localPlayer.SetHatIDRpc(idx);
+        }
+        else
+        {
+            Debug.Log("No se encontró PlayerController local aún. Se aplicará al spawn con selectedSombrero.");
         }
     }
 }

@@ -3,8 +3,6 @@ using UnityEngine;
 using System.Globalization;
 using TMPro;
 
-
-
 public class PlayerController : NetworkBehaviour
 {
     Camera playerCamera;
@@ -16,10 +14,6 @@ public class PlayerController : NetworkBehaviour
     public float FireRate = 2;
     float lastShootTimer = 0;
     public bool FullAuto;
-
-    [Header("Hats")]
-    public GameObject[] Hats; // Lista de accesorios de cabeza disponibles
-    private GameObject currentHat; // Accesorio de cabeza actual   
 
     [Header("Player Settings")]
     public float speed = 2f; // velocidad de movimiento del jugador
@@ -45,6 +39,14 @@ public class PlayerController : NetworkBehaviour
     public MenuManager menuManager;
     private TMP_Text PlayerLabel;
 
+    [Header("Hats")]
+    public GameObject[] Hats;     // Asignar 3 prefabs en el Inspector
+    private GameObject currentHat;
+    private int _lastHat = -1;
+
+    // Para no repetir SFX/acciones al morir
+    private bool hasPlayedDeath = false;
+
     void Start()
     {
         playerCamera = Camera.main;
@@ -54,18 +56,30 @@ public class PlayerController : NetworkBehaviour
         {
             menuManager.HUD.gameObject.SetActive(true);
 
-            //Establecer nombre y accesorio seleccionado
-            SetNameIDRpc(menuManager.selectedNameIndex); // Por defecto, el primer nombre
+            //Establecer nombre y sombrero iniciales desde menú
+            SetNameIDRpc(menuManager.selectedNameIndex);
+            SetHatIDRpc(menuManager.selectedSombrero);
         }
 
         if (IsClient)
         {
-            //copia el nombre del jugador al menu
+            // Etiqueta de nombre sobre el jugador
             PlayerLabel = Instantiate(menuManager.TemplatePlayerLabel, menuManager.HUD).GetComponent<TMP_Text>();
             PlayerLabel.gameObject.SetActive(true);
-
-
         }
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+
+        // Reaccionar a cambios replicados (sombrero y vida)
+        hatId.OnValueChanged += (prev, nextVal) => UpdateHat(nextVal);
+        Health.OnValueChanged += OnHealthChanged;
+
+        // Aplicar estado actual al entrar
+        UpdateHat(hatId.Value);
+        OnHealthChanged(Health.Value, Health.Value); // forzar refresco de HUD/estado visual
     }
 
     //Notifica al servidor que el jugador ha seleccionado un nombre
@@ -75,6 +89,8 @@ public class PlayerController : NetworkBehaviour
         nameId.Value = idx;
     }
 
+    // Setter del sombrero DEBE ser Server RPC
+    [Rpc(SendTo.Server)]
     public void SetHatIDRpc(int idx)
     {
         hatId.Value = idx;
@@ -90,69 +106,105 @@ public class PlayerController : NetworkBehaviour
             if (isAlive())
             {
                 if (Input.GetKey(KeyCode.W))
-                {
                     transform.position += new Vector3(0, 0, 1 * Time.deltaTime);
-                }
                 if (Input.GetKey(KeyCode.S))
-                {
                     transform.position += new Vector3(0, 0, -1 * Time.deltaTime);
-                }
                 if (Input.GetKey(KeyCode.A))
-                {
                     transform.position += new Vector3(-1 * Time.deltaTime, 0, 0);
-                }
                 if (Input.GetKey(KeyCode.D))
-                {
                     transform.position += new Vector3(1 * Time.deltaTime, 0, 0);
-                }
 
                 float mag = desiredDirection.magnitude;
-                //en el animator debe existir un parametro isWalking para activar la animacion de movimiento
                 animator.SetBool("isWalking", mag > 0);
                 if (mag > 0)
                 {
-                    //interpolar entre la rotacion actual y la deseada
                     Quaternion q = Quaternion.LookRotation(desiredDirection);
                     transform.rotation = Quaternion.Slerp(transform.rotation, q, Time.deltaTime * 10);
-                    //hay que declarar public float speed=2 mas arriba
                     transform.Translate(0, 0, speed * Time.deltaTime);
                 }
             }
-            if(FullAuto)
+
+            // Disparo: Fire1 (Mouse0). Semi/Auto correctos
+            bool wantsToShoot = FullAuto ? Input.GetButton("Fire1") : Input.GetButtonDown("Fire1");
+            if (wantsToShoot)
             {
-                if (Input.GetButton("Fire1"))
-                {
-                    FireWeaponRpc();
-                }
-            }
-            else
-            {
-                if (Input.GetButtonDown("Fire1"))
-                {
-                    FireWeaponRpc();
-                }
+                FireWeaponRpc(); // Server
             }
 
             playerCamera.transform.position = transform.position + CameraOffset;
             playerCamera.transform.LookAt(transform.position);
         }
 
-        menuManager.labelHealth.text = "" + Health.Value;
-
+        // Avanza el temporizador SOLO en server (cooldown correcto)
         if (IsServer)
         {
             lastShootTimer += Time.deltaTime;
         }
 
-        if (IsClient)
+        // UI de etiqueta (nombre) para todos los clientes
+        if (IsClient && PlayerLabel != null)
         {
-            PlayerLabel.text = menuManager.allowedNames[nameId.Value];
-            //Posicion de la etiqueta cerca del jugador
-            PlayerLabel.transform.position = playerCamera.WorldToScreenPoint(transform.position
-                + new Vector3(0, 0.8f, 0));
+            if (menuManager.allowedNames != null && nameId.Value >= 0 && nameId.Value < menuManager.allowedNames.Count)
+                PlayerLabel.text = menuManager.allowedNames[nameId.Value];
 
-            //Actualiza el accesorio de la cabeza
-            UpdateHat(hatId.Value);
+            PlayerLabel.transform.position = playerCamera.WorldToScreenPoint(transform.position + new Vector3(0, 0.8f, 0));
+        }
+    }
+
+    private void OnHealthChanged(int previous, int current)
+    {
+        // Actualiza HUD SOLO del owner (evita que el remoto pise tu HUD)
+        if (IsOwner && menuManager != null && menuManager.labelHealth != null)
+        {
+            menuManager.labelHealth.text = current.ToString();
+        }
+
+        // Estado visual/animación en TODOS los clientes
+        if (current <= 0)
+        {
+            if (animator != null)
+                animator.SetBool("Die", true);
+
+            var col = GetComponent<Collider>();
+            if (col != null) col.enabled = false;
+
+            // Evitar que “siga caminando”
+            speed = 0f;
+
+            // SFX una sola vez por cliente
+            if (!hasPlayedDeath)
+            {
+                hasPlayedDeath = true;
+                var au = GetComponent<AudioSource>();
+                if (au != null && DeathSound != null)
+                {
+                    au.clip = DeathSound;
+                    au.Play();
+                }
+            }
+        }
+    }
+
+    void UpdateHat(int idx)
+    {
+        if (Hats == null || Hats.Length == 0) return;
+        if (idx == _lastHat) return;
+
+        _lastHat = idx;
+
+        if (currentHat != null)
+        {
+            Destroy(currentHat);
+            currentHat = null;
+        }
+
+        if (idx >= 0 && idx < Hats.Length && Hats[idx] != null)
+        {
+
+            Transform parent = transform;
+            currentHat = Instantiate(Hats[idx], parent);
+            currentHat.transform.localPosition = new Vector3(0f, 0.65f, 0f); // ajusta altura a tu rig
+            currentHat.transform.localRotation = Quaternion.identity;
         }
     }
 
@@ -163,29 +215,12 @@ public class PlayerController : NetworkBehaviour
     {
         Debug.Log("collision con " + other.name);
         DamageVolume dv = other.GetComponent<DamageVolume>();
-        if(dv != null)
+        if (dv != null)
         {
             TakeDamage(dv.damagePerSec);
             insideDamageVolume = true;
             insideDVCounter = 0; // reinicio el contador
         }
-    }
-
-    void UpdateHat(int idx)
-    {
-        if(Hats.Length == 0) return;
-
-        if (currentHat != null)
-        {
-            Destroy(currentHat);
-        }
-
-        if (idx >= 0 && idx < Hats.Length)
-        {
-            currentHat = Instantiate(Hats[idx], transform.position, Quaternion.identity, transform);
-            currentHat.transform.localPosition = new Vector3(0, 0.65f, 0); // Ajusta la posición del sombrero
-            currentHat.transform.localRotation = Quaternion.identity; // Asegura que el sombrero esté orientado correctamente
-        }   
     }
 
     private void OnTriggerStay(Collider other)
@@ -194,7 +229,7 @@ public class PlayerController : NetworkBehaviour
         if (dv != null)
         {
             insideDVCounter += Time.deltaTime;
-            if(insideDVCounter > 1) // si ya paso un segundo
+            if (insideDVCounter > 1) // si ya paso un segundo
             {
                 insideDVCounter = 0;
                 TakeDamage(dv.damagePerSec);
@@ -216,9 +251,10 @@ public class PlayerController : NetworkBehaviour
     [Rpc(SendTo.Server)]
     public void FireWeaponRpc()
     {
-        if (lastShootTimer < (60/FireRate)) return;
+        // Si FireRate = disparos/segundo, tiempo mínimo entre disparos es 1/FireRate
+        if (lastShootTimer < (1f / Mathf.Max(FireRate, 0.0001f))) return;
 
-        if(ProjectilePrefab != null)
+        if (ProjectilePrefab != null && WeaponSocket != null)
         {
             GameObject go = Instantiate(ProjectilePrefab, WeaponSocket.position, WeaponSocket.rotation);
             Proyectile proj = go.GetComponent<Proyectile>();
@@ -232,10 +268,8 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
-
     //Llamada a procedimiento remoto para que el servidor calcule la nueva salud en base al daño
     [Rpc(SendTo.Server)]
-
     public void TakeDamageRpc(int amount)
     {
         Debug.Log("TakeDamage en servidor");
@@ -244,35 +278,37 @@ public class PlayerController : NetworkBehaviour
 
     void TakeDamage(int damage)
     {
-        if(isAlive())
+        if (isAlive())
         {
-            if(!IsServer)
+            if (!IsServer)
             {
-                //si no es lamada en un servidor, notificarlo
+                // Notificar al servidor si se llamó desde cliente
                 TakeDamageRpc(damage);
                 return;
             }
 
             Health.Value -= damage;
+
+            // Ya no disparamos animación aquí; la dispara OnHealthChanged en todos
             if (Health.Value <= 0)
             {
-                //pos me mori
                 OnDeath();
-                //Animacion de muerte
-                animator.SetBool("Die", true);
             }
+
             Debug.Log("health: " + Health.Value);
         }
     }
 
     void OnDeath()
     {
-
-        // particle.play
-        //sound.play
         Debug.Log("me muero Xdxdxd");
-        GetComponent<AudioSource>().clip = DeathSound;
-        GetComponent<AudioSource>().Play();
+        // El SFX visual lo maneja OnHealthChanged para todos los clientes
+        var au = GetComponent<AudioSource>();
+        if (au != null && DeathSound != null)
+        {
+            au.clip = DeathSound;
+            au.Play();
+        }
     }
 
     public bool isAlive()
